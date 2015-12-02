@@ -196,14 +196,31 @@ compileTemplates'
 compileTemplates' = do
     hs <- getHS
     let tpathDocfiles :: [(TPath, DocumentFile)]
-        tpathDocfiles = map (\(a,b) -> (a, b))
-                            (H.toList $ _templateMap hs)
+        tpathDocfiles = H.toList $ _templateMap hs
     foldM runOne H.empty tpathDocfiles
   where
     runOne tmap (tpath, df) = do
         !mHtml <- compileTemplate tpath df
         return $! H.insert tpath (mHtml, mimeType $! dfDoc df) tmap
 
+
+------------------------------------------------------------------------------
+-- | Prepare template for execution
+prepareTemplate
+    :: Monad n
+    => HeistState n
+    -> TPath
+    -> DocumentFile
+    -> IO (Either [String] (n Builder, MIMEType))
+prepareTemplate hs tpath df = do
+    (bld, hs') <- runHeistT compile (X.TextNode "") hs
+    return $ case _spliceErrors hs' of
+               [] -> Right $! bld
+               es -> Left $ map T.unpack es
+  where
+    compile = do
+      !mHtml <- interpret . DL.fromList <$> compileTemplate tpath df
+      return $! (mHtml, mimeType $! dfDoc df)
 
 ------------------------------------------------------------------------------
 -- | Consolidate consecutive Pure Chunks.
@@ -617,7 +634,7 @@ textSplice f = fromText . f
 
 
 ------------------------------------------------------------------------------
--- | This is the same as htmlNodeSplice.  
+-- | This is the same as htmlNodeSplice.
 nodeSplice :: (a -> [X.Node]) -> a -> Builder
 nodeSplice f = X.renderHtmlFragment X.UTF8 . f
 {-# DEPRECATED nodeSplice

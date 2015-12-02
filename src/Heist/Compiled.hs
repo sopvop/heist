@@ -17,6 +17,7 @@ module Heist.Compiled
   -- * High level compiled splice API
     Splice
   , renderTemplate
+  , prepareTemplate
   , codeGen
   , runChildren
 
@@ -52,7 +53,7 @@ module Heist.Compiled
 
   ) where
 
-import Heist.Compiled.Internal
+import           Heist.Compiled.Internal
 
 -- $yieldOverview
 -- The internals of the Chunk data type are deliberately not exported because

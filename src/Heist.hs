@@ -23,6 +23,7 @@ module Heist
   , addTemplatePathPrefix
   , initHeist
   , initHeistWithCacheTag
+  , initTemplate
   , defaultInterpretedSplices
   , defaultLoadTimeSplices
   , emptyHeistConfig
@@ -85,8 +86,10 @@ module Heist
 ------------------------------------------------------------------------------
 import           Control.Exception.Lifted
 import           Control.Monad.State
+import           Control.Monad.Trans.Except
 import           Data.ByteString               (ByteString)
 import qualified Data.ByteString               as B
+import           Data.ByteString.Builder       (Builder)
 import           Data.Either
 import qualified Data.Foldable                 as F
 import           Data.HashMap.Strict           (HashMap)
@@ -101,9 +104,9 @@ import qualified Text.XmlHtml                  as X
 ------------------------------------------------------------------------------
 import           Heist.Common
 import qualified Heist.Compiled.Internal       as C
+import           Heist.Internal.Types
 import qualified Heist.Interpreted.Internal    as I
 import           Heist.Splices
-import           Heist.Internal.Types
 ------------------------------------------------------------------------------
 
 
@@ -243,33 +246,54 @@ mkSplicePrefix ns
 
 
 ------------------------------------------------------------------------------
+prepareHeistState :: HE.KeyGen
+                  -> HeistConfig m
+                  -> TemplateRepo
+                  -> IO (Either [String] (HeistState m))
+prepareHeistState keyGen (HeistConfig sc ns enn) repo = do
+    etmap <- preproc keyGen lt repo ns
+    pure $ do
+      tmap <- etmap
+      is <- eis
+      cs <- ecs
+      as <- eas
+      pure $ empty { _spliceMap = is
+                   , _templateMap = tmap
+                   , _compiledSpliceMap = cs
+                   , _attrSpliceMap = as
+                   , _splicePrefix = prefix
+                   , _errorNotBound = enn
+                   }
+  where
+    empty = emptyHS keyGen
+    (SpliceConfig i lt c a _) = sc
+    prefix = mkSplicePrefix ns
+    eis = runHashMap $ mapK (prefix<>) i
+    ecs = runHashMap $ mapK (prefix<>) c
+    eas = runHashMap $ mapK (prefix<>) a
+
+------------------------------------------------------------------------------
 initHeist' :: Monad n
            => HE.KeyGen
            -> HeistConfig n
            -> TemplateRepo
            -> IO (Either [String] (HeistState n))
-initHeist' keyGen (HeistConfig sc ns enn) repo = do
-    let empty = emptyHS keyGen
-    let (SpliceConfig i lt c a _) = sc
-    etmap <- preproc keyGen lt repo ns
-    let prefix = mkSplicePrefix ns
-    let eis = runHashMap $ mapK (prefix<>) i
-        ecs = runHashMap $ mapK (prefix<>) c
-        eas = runHashMap $ mapK (prefix<>) a
-    let hs1 = do
-          tmap <- etmap
-          is <- eis
-          cs <- ecs
-          as <- eas
-          return $ empty { _spliceMap = is
-                         , _templateMap = tmap
-                         , _compiledSpliceMap = cs
-                         , _attrSpliceMap = as
-                         , _splicePrefix = prefix
-                         , _errorNotBound = enn
-                         }
-    either (return . Left) C.compileTemplates hs1
+initHeist' keyGen hc repo = runExceptT $ do
+    hs <- ExceptT $ prepareHeistState keyGen hc repo
+    ExceptT $ C.compileTemplates hs
 
+------------------------------------------------------------------------------
+initTemplate :: Monad n
+          => HeistConfig n
+          -> TemplateRepo
+          -> ByteString
+          -> IO (Either [String] (n Builder, MIMEType))
+initTemplate hc repo nm = runExceptT $ do
+    kg <- lift HE.newKeyGen
+    hs <- ExceptT $ prepareHeistState kg hc repo
+    case lookupTemplate nm hs _templateMap of
+      Nothing -> throwE ["Can't find template"]
+      Just (df, fileName) -> ExceptT $ C.prepareTemplate hs fileName df
 
 ------------------------------------------------------------------------------
 -- | Runs preprocess on a TemplateRepo and returns the modified templates.
